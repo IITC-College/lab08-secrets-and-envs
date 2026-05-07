@@ -12,10 +12,8 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # TODO: add JWT_SECRET from secrets
-      # TODO: add NODE_ENV from vars
-      # HINT: secrets are referenced with ${{ secrets.NAME }}
-      # HINT: vars are referenced with ${{ vars.NAME }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      NODE_ENV: ${{ vars.NODE_ENV }}
 
     steps:
       - name: Checkout
