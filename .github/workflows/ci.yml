@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit:
+    name: Unit tests (in-memory Mongo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements-dev.txt
+
+      - name: Run pytest
+        env:
+          APP_ENV: TEST
+        run: pytest
+
+  live:
+    name: Live server test (Atlas)
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Start live server in background
+        env:
+          APP_ENV: DEV
+          PORT: "3000"
+          MONGO_USER: ${{ secrets.MONGO_USER }}
+          MONGO_PASS: ${{ secrets.MONGO_PASS }}
+          MONGO_HOST: ${{ secrets.MONGO_HOST }}
+          MONGO_DB: ${{ secrets.MONGO_DB }}
+        run: |
+          python -m uvicorn app.main:app --port 3000 --no-access-log > server.log 2>&1 &
+          echo $! > server.pid
+
+      - name: Wait for server ready
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/livez > /dev/null; then
+              echo "Server up after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server did not become ready"
+          cat server.log
+          exit 1
+
+      - name: Smoke test endpoints
+        run: |
+          set -euo pipefail
+
+          echo "== /livez =="
+          curl -sf http://localhost:3000/livez | grep -q '"status":"ok"'
+
+          echo "== /readyz =="
+          curl -sf http://localhost:3000/readyz | grep -q '"status":"ready"'
+
+          echo "== /status =="
+          curl -sf http://localhost:3000/status | grep -q '"status":"DEV"'
+
+          echo "== POST /api/users =="
+          CREATED=$(curl -sf -X POST http://localhost:3000/api/users \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"CI Bot","email":"ci-'"$GITHUB_RUN_ID"'@example.com"}')
+          echo "$CREATED"
+          USER_ID=$(echo "$CREATED" | python -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+          echo "== GET /api/users/$USER_ID =="
+          curl -sf "http://localhost:3000/api/users/$USER_ID" | grep -q '"name":"CI Bot"'
+
+          echo "== PATCH /api/users/$USER_ID =="
+          curl -sf -X PATCH "http://localhost:3000/api/users/$USER_ID" \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"CI Bot Updated"}' | grep -q '"name":"CI Bot Updated"'
+
+          echo "== DELETE /api/users/$USER_ID =="
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://localhost:3000/api/users/$USER_ID")
+          test "$CODE" = "204"
+
+          echo "All live checks passed"
+
+      - name: Cleanup server
+        if: always()
+        run: |
+          if [ -f server.pid ]; then kill "$(cat server.pid)" || true; fi
+          echo "--- server.log ---"
+          cat server.log || true

@@ -1,2 +1,11 @@
-node_modules/
-.claude/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+.DS_Store
+.claude
